@@ -6,6 +6,7 @@ from gedcom.parser import Parser
 from collections import defaultdict
 import re
 from datetime import datetime, date
+import argparse
 
 class GedcomParser:
     def __init__(self, file_path):
@@ -14,6 +15,7 @@ class GedcomParser:
         self.families = defaultdict(lambda: defaultdict(lambda: None))
         self.gedcom_parser = Parser()
         self.validation_issues = []
+        self.issue_summary = defaultdict(int)
 
     def parse(self):
         self.gedcom_parser.parse_file(self.file_path)
@@ -267,50 +269,104 @@ class GedcomParser:
         return self.validation_issues
     
 
+    def _categorize_issue(self, issue):
+        if "born after child" in issue:
+            return "Parent born after child"
+        elif "Marriage date" in issue and "before" in issue:
+            return "Marriage before birth"
+        elif "Marriage date" in issue and "after child's birth" in issue:
+            return "Child born before marriage"
+        else:
+            return "Other"
+
+    def validate_data(self):
+        self._validate_dates()
+        self._validate_family_relationships()
+        self._validate_marriage_dates()
+        
+        # Categorize issues and update summary
+        for issue in self.validation_issues:
+            category = self._categorize_issue(issue)
+            self.issue_summary[category] += 1
+
+    def get_summary_statistics(self):
+        total_issues = len(self.validation_issues)
+        return {
+            "total_issues": total_issues,
+            "issues_by_type": dict(self.issue_summary),
+            "total_individuals": len(self.individuals),
+            "total_families": len(self.families),
+            "percent_families_with_issues": (len(set(issue.split(' - ')[0].split(' ')[1] for issue in self.validation_issues)) / len(self.families)) * 100
+        }
+
     def generate_csv_report(self, output_file):
+        summary_stats = self.get_summary_statistics()
+        
         with open(output_file, 'w', newline='') as csvfile:
-            fieldnames = ['Family ID', 'Father', 'Mother', 'Issue']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer = csv.writer(csvfile)
             
-            writer.writeheader()
+            # Write summary statistics
+            writer.writerow(["Summary Statistics"])
+            writer.writerow(["Total Individuals", summary_stats["total_individuals"]])
+            writer.writerow(["Total Families", summary_stats["total_families"]])
+            writer.writerow(["Total Issues", summary_stats["total_issues"]])
+            writer.writerow(["Percent of Families with Issues", f"{summary_stats['percent_families_with_issues']:.2f}%"])
+            writer.writerow([])
+            
+            writer.writerow(["Issues by Type"])
+            for issue_type, count in summary_stats["issues_by_type"].items():
+                writer.writerow([issue_type, count])
+            writer.writerow([])
+            
+            # Write individual issues
+            writer.writerow(["Family ID", "Father", "Mother", "Issue"])
             for issue in self.validation_issues:
                 family_info, issue_detail = issue.split('\n')
                 family_id = family_info.split(' - ')[0].split(' ')[1]
                 father = family_info.split('Father: ')[1].split(', Mother:')[0]
                 mother = family_info.split('Mother: ')[1]
-                writer.writerow({
-                    'Family ID': family_id,
-                    'Father': father,
-                    'Mother': mother,
-                    'Issue': issue_detail.strip()
-                })
+                writer.writerow([family_id, father, mother, issue_detail.strip()])
 
     def generate_html_report(self, output_file):
-        html_content = """
+        summary_stats = self.get_summary_statistics()
+        
+        html_content = f"""
         <html>
         <head>
             <title>GEDCOM Validation Report</title>
             <style>
-                table {
-                    border-collapse: collapse;
-                    width: 100%;
-                }
-                th, td {
-                    border: 1px solid #ddd;
-                    padding: 8px;
-                    text-align: left;
-                }
-                tr:nth-child(even) {
-                    background-color: #f2f2f2;
-                }
-                th {
-                    background-color: #4CAF50;
-                    color: white;
-                }
+                body {{ font-family: Arial, sans-serif; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                tr:nth-child(even) {{ background-color: #f2f2f2; }}
+                th {{ background-color: #4CAF50; color: white; }}
+                h1, h2 {{ color: #4CAF50; }}
             </style>
         </head>
         <body>
             <h1>GEDCOM Validation Report</h1>
+            
+            <h2>Summary Statistics</h2>
+            <table>
+                <tr><th>Metric</th><th>Value</th></tr>
+                <tr><td>Total Individuals</td><td>{summary_stats["total_individuals"]}</td></tr>
+                <tr><td>Total Families</td><td>{summary_stats["total_families"]}</td></tr>
+                <tr><td>Total Issues</td><td>{summary_stats["total_issues"]}</td></tr>
+                <tr><td>Percent of Families with Issues</td><td>{summary_stats["percent_families_with_issues"]:.2f}%</td></tr>
+            </table>
+            
+            <h2>Issues by Type</h2>
+            <table>
+                <tr><th>Issue Type</th><th>Count</th></tr>
+        """
+        
+        for issue_type, count in summary_stats["issues_by_type"].items():
+            html_content += f"<tr><td>{issue_type}</td><td>{count}</td></tr>"
+        
+        html_content += """
+            </table>
+            
+            <h2>Detailed Issues</h2>
             <table>
                 <tr>
                     <th>Family ID</th>
@@ -342,26 +398,13 @@ class GedcomParser:
 
         with open(output_file, 'w') as htmlfile:
             htmlfile.write(html_content)
+    
+def setup_argparser():
+    parser = argparse.ArgumentParser(description='GEDCOM Parser and Validator')
+    parser.add_argument('--gedcom_file', required=True, help='Path to the GEDCOM file')
+    parser.add_argument('--demo', action='store_true', help='Run demonstration functions')
+    return parser
 
-# Usage example
-if __name__ == "__main__":
-    try:
-        parser = GedcomParser("path_to_your_gedcom_file.ged")
-        parser.parse()
-        parsed_data = parser.get_parsed_data()
-        
-        print(f"Total individuals: {len(parsed_data['individuals'])}")
-        print(f"Total families: {len(parsed_data['families'])}")
-        
-        # Example: Print detailed information for the first individual
-        first_individual = next(iter(parsed_data['individuals'].values()))
-        print("\nExample Individual Details:")
-        for key, value in first_individual.items():
-            print(f"{key}: {value}")
-        
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        print("Please check that the GEDCOM file path is correct and the file is accessible.")
 
 # New demonstration code
 def demonstrate_validation(parsed_data):
@@ -421,35 +464,41 @@ def demonstrate_validation(parsed_data):
         print(f"    Marriage: {family['marriage']}")
         if len(parsed_data['families']) >= 3:  # Stop after 3 examples
             break
+
 if __name__ == "__main__":
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        gedcom_file = os.path.join(script_dir, "your_gedcom_file.ged")
-        parser = GedcomParser(gedcom_file)
+        arg_parser = setup_argparser()
+        args = arg_parser.parse_args()
+
+        parser = GedcomParser(args.gedcom_file)
         parser.parse()
-        parser.validate_data()
-        parsed_data = parser.get_parsed_data()
-        validation_issues = parser.get_validation_issues()
-        
-        print(f"Total individuals: {len(parsed_data['individuals'])}")
-        print(f"Total families: {len(parsed_data['families'])}")
-        
-        print("\nValidation Issues:")
-        if validation_issues:
-            for issue in validation_issues:
-                print(f"{issue}\n")
+
+        if args.demo:
+            parsed_data = parser.get_parsed_data()
+            demonstrate_validation(parsed_data)
         else:
-            print("No validation issues found.")
-        
-        # Generate reports
-        csv_report = os.path.join(script_dir, "gedcom_validation_report.csv")
-        html_report = os.path.join(script_dir, "gedcom_validation_report.html")
-        parser.generate_csv_report(csv_report)
-        parser.generate_html_report(html_report)
-        
-        print("\nReports generated:")
-        print(f"- CSV report: {csv_report}")
-        print(f"- HTML report: {html_report}")
+            parser.validate_data()
+            summary_stats = parser.get_summary_statistics()
+            
+            print(f"Total individuals: {summary_stats['total_individuals']}")
+            print(f"Total families: {summary_stats['total_families']}")
+            print(f"Total issues: {summary_stats['total_issues']}")
+            print(f"Percent of families with issues: {summary_stats['percent_families_with_issues']:.2f}%")
+            
+            print("\nIssues by Type:")
+            for issue_type, count in summary_stats['issues_by_type'].items():
+                print(f"- {issue_type}: {count}")
+            
+            # Generate reports
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            csv_report = os.path.join(script_dir, "gedcom_validation_report.csv")
+            html_report = os.path.join(script_dir, "gedcom_validation_report.html")
+            parser.generate_csv_report(csv_report)
+            parser.generate_html_report(html_report)
+            
+            print(f"\nReports generated:")
+            print(f"- CSV report: {csv_report}")
+            print(f"- HTML report: {html_report}")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
