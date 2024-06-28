@@ -1,3 +1,5 @@
+import csv
+import os
 from gedcom.element.individual import IndividualElement
 from gedcom.element.family import FamilyElement
 from gedcom.parser import Parser
@@ -263,6 +265,83 @@ class GedcomParser:
 
     def get_validation_issues(self):
         return self.validation_issues
+    
+
+    def generate_csv_report(self, output_file):
+        with open(output_file, 'w', newline='') as csvfile:
+            fieldnames = ['Family ID', 'Father', 'Mother', 'Issue']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            writer.writeheader()
+            for issue in self.validation_issues:
+                family_info, issue_detail = issue.split('\n')
+                family_id = family_info.split(' - ')[0].split(' ')[1]
+                father = family_info.split('Father: ')[1].split(', Mother:')[0]
+                mother = family_info.split('Mother: ')[1]
+                writer.writerow({
+                    'Family ID': family_id,
+                    'Father': father,
+                    'Mother': mother,
+                    'Issue': issue_detail.strip()
+                })
+
+    def generate_html_report(self, output_file):
+        html_content = """
+        <html>
+        <head>
+            <title>GEDCOM Validation Report</title>
+            <style>
+                table {
+                    border-collapse: collapse;
+                    width: 100%;
+                }
+                th, td {
+                    border: 1px solid #ddd;
+                    padding: 8px;
+                    text-align: left;
+                }
+                tr:nth-child(even) {
+                    background-color: #f2f2f2;
+                }
+                th {
+                    background-color: #4CAF50;
+                    color: white;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>GEDCOM Validation Report</h1>
+            <table>
+                <tr>
+                    <th>Family ID</th>
+                    <th>Father</th>
+                    <th>Mother</th>
+                    <th>Issue</th>
+                </tr>
+        """
+
+        for issue in self.validation_issues:
+            family_info, issue_detail = issue.split('\n')
+            family_id = family_info.split(' - ')[0].split(' ')[1]
+            father = family_info.split('Father: ')[1].split(', Mother:')[0]
+            mother = family_info.split('Mother: ')[1]
+            html_content += f"""
+                <tr>
+                    <td>{family_id}</td>
+                    <td>{father}</td>
+                    <td>{mother}</td>
+                    <td>{issue_detail.strip()}</td>
+                </tr>
+            """
+
+        html_content += """
+            </table>
+        </body>
+        </html>
+        """
+
+        with open(output_file, 'w') as htmlfile:
+            htmlfile.write(html_content)
 
 # Usage example
 if __name__ == "__main__":
@@ -342,10 +421,11 @@ def demonstrate_validation(parsed_data):
         print(f"    Marriage: {family['marriage']}")
         if len(parsed_data['families']) >= 3:  # Stop after 3 examples
             break
-
 if __name__ == "__main__":
     try:
-        parser = GedcomParser("path_to_your_gedcom_file.ged")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        gedcom_file = os.path.join(script_dir, "your_gedcom_file.ged")
+        parser = GedcomParser(gedcom_file)
         parser.parse()
         parser.validate_data()
         parsed_data = parser.get_parsed_data()
@@ -357,9 +437,19 @@ if __name__ == "__main__":
         print("\nValidation Issues:")
         if validation_issues:
             for issue in validation_issues:
-                print(f"- {issue}")
+                print(f"{issue}\n")
         else:
             print("No validation issues found.")
+        
+        # Generate reports
+        csv_report = os.path.join(script_dir, "gedcom_validation_report.csv")
+        html_report = os.path.join(script_dir, "gedcom_validation_report.html")
+        parser.generate_csv_report(csv_report)
+        parser.generate_html_report(html_report)
+        
+        print("\nReports generated:")
+        print(f"- CSV report: {csv_report}")
+        print(f"- HTML report: {html_report}")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
