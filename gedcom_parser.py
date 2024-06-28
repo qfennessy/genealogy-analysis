@@ -1,18 +1,151 @@
 import csv
 import os
+import argparse
 from gedcom.element.individual import IndividualElement
 from gedcom.element.family import FamilyElement
 from gedcom.parser import Parser
-from collections import defaultdict
+from collections import defaultdict, Counter
 import re
 from datetime import datetime, date
-import argparse
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Tuple
+
+@dataclass
+class Event:
+    type: str
+    date: Optional[date] = None
+    place: Optional[str] = None
+
+@dataclass
+class Individual:
+    id: str
+    name: str
+    sex: str
+    birth: Optional[Event] = None
+    death: Optional[Event] = None
+    events: List[Event] = field(default_factory=list)
+    occupations: List[str] = field(default_factory=list)
+    education: List[str] = field(default_factory=list)
+    residences: List[Event] = field(default_factory=list)
+    families_as_spouse: List[str] = field(default_factory=list)
+    families_as_child: List[str] = field(default_factory=list)
+
+@dataclass
+class Family:
+    id: str
+    husband_id: Optional[str] = None
+    wife_id: Optional[str] = None
+    children_ids: List[str] = field(default_factory=list)
+    marriage: Optional[Event] = None
+    divorce: Optional[Event] = None
+
+class GedcomData:
+    def __init__(self):
+        self.individuals: Dict[str, Individual] = {}
+        self.families: Dict[str, Family] = {}
+
+    def add_individual(self, individual: Individual):
+        self.individuals[individual.id] = individual
+
+    def add_family(self, family: Family):
+        self.families[family.id] = family
+
+    def get_individual(self, id: str) -> Optional[Individual]:
+        return self.individuals.get(id)
+
+    def get_family(self, id: str) -> Optional[Family]:
+        return self.families.get(id)
+    
+class AnalysisEngine:
+    def __init__(self, gedcom_data: GedcomData):
+        self.gedcom_data = gedcom_data
+
+    def analyze_name_frequency(self) -> Dict[str, int]:
+        """Analyze the frequency of first names."""
+        first_names = [individual.name.split()[0] for individual in self.gedcom_data.individuals.values()]
+        return dict(Counter(first_names))
+
+    def analyze_surname_frequency(self) -> Dict[str, int]:
+        """Analyze the frequency of surnames."""
+        surnames = [individual.name.split()[-1] for individual in self.gedcom_data.individuals.values()]
+        return dict(Counter(surnames))
+
+    def analyze_birth_date_range(self) -> Tuple[date, date]:
+        """Find the earliest and latest birth dates."""
+        birth_dates = [ind.birth.date for ind in self.gedcom_data.individuals.values() if ind.birth and ind.birth.date]
+        return min(birth_dates), max(birth_dates)
+
+    def analyze_death_date_range(self) -> Tuple[date, date]:
+        """Find the earliest and latest death dates."""
+        death_dates = [ind.death.date for ind in self.gedcom_data.individuals.values() if ind.death and ind.death.date]
+        return min(death_dates), max(death_dates)
+
+    def analyze_location_statistics(self) -> Dict[str, int]:
+        """Analyze the frequency of birth places."""
+        birth_places = [ind.birth.place for ind in self.gedcom_data.individuals.values() if ind.birth and ind.birth.place]
+        return dict(Counter(birth_places))
+
+    def analyze_average_lifespan(self) -> float:
+        """Calculate the average lifespan of individuals with known birth and death dates."""
+        lifespans = []
+        for individual in self.gedcom_data.individuals.values():
+            if individual.birth and individual.birth.date and individual.death and individual.death.date:
+                lifespan = (individual.death.date - individual.birth.date).days / 365.25
+                lifespans.append(lifespan)
+        return sum(lifespans) / len(lifespans) if lifespans else 0
+
+    def analyze_family_sizes(self) -> Dict[int, int]:
+        """Analyze the distribution of family sizes (number of children)."""
+        family_sizes = [len(family.children_ids) for family in self.gedcom_data.families.values()]
+        return dict(Counter(family_sizes))
+
+    def find_largest_families(self, n: int = 5) -> List[Tuple[str, int]]:
+        """Find the n largest families by number of children."""
+        families = [(fam.id, len(fam.children_ids)) for fam in self.gedcom_data.families.values()]
+        return sorted(families, key=lambda x: x[1], reverse=True)[:n]
+
+    def analyze_marriage_age(self) -> Dict[str, float]:
+        """Calculate the average age at first marriage for males and females."""
+        male_ages = []
+        female_ages = []
+        for family in self.gedcom_data.families.values():
+            if family.marriage and family.marriage.date:
+                if family.husband_id:
+                    husband = self.gedcom_data.individuals[family.husband_id]
+                    if husband.birth and husband.birth.date:
+                        age = (family.marriage.date - husband.birth.date).days / 365.25
+                        male_ages.append(age)
+                if family.wife_id:
+                    wife = self.gedcom_data.individuals[family.wife_id]
+                    if wife.birth and wife.birth.date:
+                        age = (family.marriage.date - wife.birth.date).days / 365.25
+                        female_ages.append(age)
+        return {
+            "male": sum(male_ages) / len(male_ages) if male_ages else 0,
+            "female": sum(female_ages) / len(female_ages) if female_ages else 0
+        }
+
+    def find_most_common_occupation(self) -> Tuple[str, int]:
+        """Find the most common occupation."""
+        occupations = [occ for ind in self.gedcom_data.individuals.values() for occ in ind.occupations]
+        return Counter(occupations).most_common(1)[0] if occupations else ("Unknown", 0)
+
+    def analyze_generation_span(self) -> int:
+        """Calculate the number of generations in the family tree."""
+        def get_generation(individual_id: str, generation: int = 0) -> int:
+            individual = self.gedcom_data.individuals[individual_id]
+            child_generations = [get_generation(child_id, generation + 1) 
+                                 for family_id in individual.families_as_spouse
+                                 for child_id in self.gedcom_data.families[family_id].children_ids]
+            return max(child_generations) if child_generations else generation
+
+        root_individuals = [ind.id for ind in self.gedcom_data.individuals.values() if not ind.families_as_child]
+        return max(get_generation(root_id) for root_id in root_individuals) + 1
 
 class GedcomParser:
     def __init__(self, file_path):
         self.file_path = file_path
-        self.individuals = defaultdict(lambda: defaultdict(lambda: None))
-        self.families = defaultdict(lambda: defaultdict(lambda: None))
+        self.gedcom_data = GedcomData()
         self.gedcom_parser = Parser()
         self.validation_issues = []
         self.issue_summary = defaultdict(int)
@@ -29,23 +162,29 @@ class GedcomParser:
 
     def _parse_individual(self, individual):
         ind_id = individual.get_pointer()
-        self.individuals[ind_id]['id'] = ind_id
-        self.individuals[ind_id]['name'] = self._validate_name(individual.get_name())
-        self.individuals[ind_id]['sex'] = self._validate_sex(self._get_sex(individual))
-        self.individuals[ind_id]['birth'] = self._validate_event(self._get_event_details(individual, 'BIRT'))
-        self.individuals[ind_id]['death'] = self._validate_event(self._get_event_details(individual, 'DEAT'))
-        self.individuals[ind_id]['occupation'] = self._validate_list(self._get_occupation(individual))
-        self.individuals[ind_id]['education'] = self._validate_list(self._get_education(individual))
-        self.individuals[ind_id]['residence'] = self._validate_list(self._get_residence(individual))
+        ind = Individual(
+            id=ind_id,
+            name=self._validate_name(individual.get_name()),
+            sex=self._validate_sex(self._get_sex(individual)),
+            birth=self._validate_event(self._get_event_details(individual, 'BIRT')),
+            death=self._validate_event(self._get_event_details(individual, 'DEAT')),
+            occupations=self._validate_list(self._get_occupation(individual)),
+            education=self._validate_list(self._get_education(individual)),
+            residences=self._validate_list(self._get_residence(individual))
+        )
+        self.gedcom_data.add_individual(ind)
 
     def _parse_family(self, family):
         fam_id = family.get_pointer()
-        self.families[fam_id]['id'] = fam_id
-        self.families[fam_id]['husband'] = self._validate_id(self._get_family_member(family, 'HUSB'))
-        self.families[fam_id]['wife'] = self._validate_id(self._get_family_member(family, 'WIFE'))
-        self.families[fam_id]['children'] = self._validate_list(self._get_family_members(family, 'CHIL'))
-        self.families[fam_id]['marriage'] = self._validate_event(self._get_event_details(family, 'MARR'))
-        self.families[fam_id]['divorce'] = self._validate_event(self._get_event_details(family, 'DIV'))
+        fam = Family(
+            id=fam_id,
+            husband_id=self._validate_id(self._get_family_member(family, 'HUSB')),
+            wife_id=self._validate_id(self._get_family_member(family, 'WIFE')),
+            children_ids=self._validate_list(self._get_family_members(family, 'CHIL')),
+            marriage=self._validate_event(self._get_event_details(family, 'MARR')),
+            divorce=self._validate_event(self._get_event_details(family, 'DIV'))
+        )
+        self.gedcom_data.add_family(fam)
 
     def _get_sex(self, individual):
         for child in individual.get_child_elements():
@@ -130,14 +269,15 @@ class GedcomParser:
         if not place:
             return None
         return place.strip()
-
-    def _validate_event(self, event):
-        if not event:
+    
+    def _validate_event(self, event_details):
+        if not event_details:
             return None
-        return {
-            'date': self._validate_date(event.get('date')),
-            'place': self._validate_place(event.get('place'))
-        }
+        return Event(
+            type=event_details.get('type', 'Unknown'),
+            date=self._validate_date(event_details.get('date')),
+            place=self._validate_place(event_details.get('place'))
+        )
 
     def _validate_list(self, items):
         if not items:
@@ -150,10 +290,8 @@ class GedcomParser:
         return id_str if re.match(r'@[^@]+@', id_str) else None
 
     def get_parsed_data(self):
-        return {
-            'individuals': dict(self.individuals),
-            'families': dict(self.families)
-        }
+        return self.gedcom_data
+
     
     def validate_data(self):
         self._validate_dates()
@@ -162,10 +300,10 @@ class GedcomParser:
 
 
     def _validate_dates(self):
-        for ind_id, individual in self.individuals.items():
-            name = individual['name']
-            birth_date = individual['birth']['date'] if individual['birth'] else None
-            death_date = individual['death']['date'] if individual['death'] else None
+        for ind_id, individual in self.gedcom_data.individuals.items():
+            name = individual.name
+            birth_date = individual.birth.date if individual.birth else None
+            death_date = individual.death.date if individual.death else None
 
             if birth_date and death_date and birth_date > death_date:
                 self.validation_issues.append(
@@ -179,20 +317,11 @@ class GedcomParser:
                 self.validation_issues.append(
                     f"Individual {ind_id} ({name}): Birth date ({birth_date}) is in the future")
 
-
-    def _get_individual_info(self, ind_id):
-        if ind_id and ind_id in self.individuals:
-            ind = self.individuals[ind_id]
-            name = ind['name']
-            birth = ind['birth']['date'] if ind['birth'] else 'Unknown'
-            return f"{ind_id}: {name}, born {birth}"
-        return "Unknown"
-
     def _validate_family_relationships(self):
-        for fam_id, family in self.families.items():
-            father_id = family['husband']
-            mother_id = family['wife']
-            children_ids = family['children']
+        for fam_id, family in self.gedcom_data.families.items():
+            father_id = family.husband_id
+            mother_id = family.wife_id
+            children_ids = family.children_ids
 
             father_info = self._get_individual_info(father_id)
             mother_info = self._get_individual_info(mother_id)
@@ -200,38 +329,33 @@ class GedcomParser:
             family_description = f"Family {fam_id} - Father: {father_info}, Mother: {mother_info}"
 
             if father_id:
-                father = self.individuals[father_id]
-                father_birth = father['birth']['date'] if father['birth'] else None
+                father = self.gedcom_data.individuals[father_id]
+                father_birth = father.birth.date if father.birth else None
 
                 for child_id in children_ids:
-                    child = self.individuals[child_id]
-                    child_name = child['name']
-                    child_birth = child['birth']['date'] if child['birth'] else None
+                    child = self.gedcom_data.individuals[child_id]
+                    child_name = child.name
+                    child_birth = child.birth.date if child.birth else None
 
                     if father_birth and child_birth and father_birth > child_birth:
                         self.validation_issues.append(
                             f"{family_description}\n"
                             f"  Issue: Father born after child ({child_id}: {child_name}, born {child_birth})")
 
-            if mother_id:
-                mother = self.individuals[mother_id]
-                mother_birth = mother['birth']['date'] if mother['birth'] else None
 
-                for child_id in children_ids:
-                    child = self.individuals[child_id]
-                    child_name = child['name']
-                    child_birth = child['birth']['date'] if child['birth'] else None
-
-                    if mother_birth and child_birth and mother_birth > child_birth:
-                        self.validation_issues.append(
-                            f"{family_description}\n"
-                            f"  Issue: Mother born after child ({child_id}: {child_name}, born {child_birth})")
+    def _get_individual_info(self, ind_id):
+        if ind_id and ind_id in self.gedcom_data.individuals:
+            ind = self.gedcom_data.individuals[ind_id]
+            name = ind.name
+            birth = ind.birth.date if ind.birth else 'Unknown'
+            return f"{ind_id}: {name}, born {birth}"
+        return "Unknown"
 
     def _validate_marriage_dates(self):
-        for fam_id, family in self.families.items():
-            marriage_date = family['marriage']['date'] if family['marriage'] else None
-            husband_id = family['husband']
-            wife_id = family['wife']
+        for fam_id, family in self.gedcom_data.families.items():
+            marriage_date = family.marriage.date if family.marriage else None
+            husband_id = family.husband_id
+            wife_id = family.wife_id
 
             father_info = self._get_individual_info(husband_id)
             mother_info = self._get_individual_info(wife_id)
@@ -240,30 +364,33 @@ class GedcomParser:
 
             if marriage_date:
                 if husband_id:
-                    husband = self.individuals[husband_id]
-                    husband_birth = husband['birth']['date'] if husband['birth'] else None
-                    if husband_birth and marriage_date < husband_birth:
-                        self.validation_issues.append(
-                            f"{family_description}\n"
-                            f"  Issue: Marriage date ({marriage_date}) before husband's birth")
+                    husband = self.gedcom_data.individuals.get(husband_id)
+                    if husband:
+                        husband_birth = husband.birth.date if husband.birth else None
+                        if husband_birth and marriage_date < husband_birth:
+                            self.validation_issues.append(
+                                f"{family_description}\n"
+                                f"  Issue: Marriage date ({marriage_date}) before husband's birth")
 
                 if wife_id:
-                    wife = self.individuals[wife_id]
-                    wife_birth = wife['birth']['date'] if wife['birth'] else None
-                    if wife_birth and marriage_date < wife_birth:
-                        self.validation_issues.append(
-                            f"{family_description}\n"
-                            f"  Issue: Marriage date ({marriage_date}) before wife's birth")
+                    wife = self.gedcom_data.individuals.get(wife_id)
+                    if wife:
+                        wife_birth = wife.birth.date if wife.birth else None
+                        if wife_birth and marriage_date < wife_birth:
+                            self.validation_issues.append(
+                                f"{family_description}\n"
+                                f"  Issue: Marriage date ({marriage_date}) before wife's birth")
 
-                for child_id in family['children']:
-                    child = self.individuals[child_id]
-                    child_name = child['name']
-                    child_birth = child['birth']['date'] if child['birth'] else None
-                    if child_birth and marriage_date > child_birth:
-                        self.validation_issues.append(
-                            f"{family_description}\n"
-                            f"  Issue: Marriage date ({marriage_date}) after child's birth "
-                            f"({child_id}: {child_name}, born {child_birth})")
+                for child_id in family.children_ids:
+                    child = self.gedcom_data.individuals.get(child_id)
+                    if child:
+                        child_name = child.name
+                        child_birth = child.birth.date if child.birth else None
+                        if child_birth and marriage_date > child_birth:
+                            self.validation_issues.append(
+                                f"{family_description}\n"
+                                f"  Issue: Marriage date ({marriage_date}) after child's birth "
+                                f"({child_id}: {child_name}, born {child_birth})")
 
     def get_validation_issues(self):
         return self.validation_issues
@@ -294,9 +421,9 @@ class GedcomParser:
         return {
             "total_issues": total_issues,
             "issues_by_type": dict(self.issue_summary),
-            "total_individuals": len(self.individuals),
-            "total_families": len(self.families),
-            "percent_families_with_issues": (len(set(issue.split(' - ')[0].split(' ')[1] for issue in self.validation_issues)) / len(self.families)) * 100
+            "total_individuals": len(self.gedcom_data.individuals),
+            "total_families": len(self.gedcom_data.families),
+            "percent_families_with_issues": (len(set(issue.split(' - ')[0].split(' ')[1] for issue in self.validation_issues)) / len(self.gedcom_data.families)) * 100 if self.gedcom_data.families else 0
         }
 
     def generate_csv_report(self, output_file):
