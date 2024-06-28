@@ -2,6 +2,9 @@ from gedcom.element.individual import IndividualElement
 from gedcom.element.family import FamilyElement
 from gedcom.parser import Parser
 from collections import defaultdict
+import re
+from datetime import datetime, date
+
 
 class GedcomParser:
     def __init__(self, file_path):
@@ -23,22 +26,22 @@ class GedcomParser:
     def _parse_individual(self, individual):
         ind_id = individual.get_pointer()
         self.individuals[ind_id]['id'] = ind_id
-        self.individuals[ind_id]['name'] = individual.get_name()
-        self.individuals[ind_id]['sex'] = self._get_sex(individual)
-        self.individuals[ind_id]['birth'] = self._get_event_details(individual, 'BIRT')
-        self.individuals[ind_id]['death'] = self._get_event_details(individual, 'DEAT')
-        self.individuals[ind_id]['occupation'] = self._get_occupation(individual)
-        self.individuals[ind_id]['education'] = self._get_education(individual)
-        self.individuals[ind_id]['residence'] = self._get_residence(individual)
+        self.individuals[ind_id]['name'] = self._validate_name(individual.get_name())
+        self.individuals[ind_id]['sex'] = self._validate_sex(self._get_sex(individual))
+        self.individuals[ind_id]['birth'] = self._validate_event(self._get_event_details(individual, 'BIRT'))
+        self.individuals[ind_id]['death'] = self._validate_event(self._get_event_details(individual, 'DEAT'))
+        self.individuals[ind_id]['occupation'] = self._validate_list(self._get_occupation(individual))
+        self.individuals[ind_id]['education'] = self._validate_list(self._get_education(individual))
+        self.individuals[ind_id]['residence'] = self._validate_list(self._get_residence(individual))
 
     def _parse_family(self, family):
         fam_id = family.get_pointer()
         self.families[fam_id]['id'] = fam_id
-        self.families[fam_id]['husband'] = self._get_family_member(family, 'HUSB')
-        self.families[fam_id]['wife'] = self._get_family_member(family, 'WIFE')
-        self.families[fam_id]['children'] = self._get_family_members(family, 'CHIL')
-        self.families[fam_id]['marriage'] = self._get_event_details(family, 'MARR')
-        self.families[fam_id]['divorce'] = self._get_event_details(family, 'DIV')
+        self.families[fam_id]['husband'] = self._validate_id(self._get_family_member(family, 'HUSB'))
+        self.families[fam_id]['wife'] = self._validate_id(self._get_family_member(family, 'WIFE'))
+        self.families[fam_id]['children'] = self._validate_list(self._get_family_members(family, 'CHIL'))
+        self.families[fam_id]['marriage'] = self._validate_event(self._get_event_details(family, 'MARR'))
+        self.families[fam_id]['divorce'] = self._validate_event(self._get_event_details(family, 'DIV'))
 
     def _get_sex(self, individual):
         for child in individual.get_child_elements():
@@ -59,18 +62,10 @@ class GedcomParser:
         return None
 
     def _get_occupation(self, individual):
-        occupations = []
-        for child in individual.get_child_elements():
-            if child.get_tag() == 'OCCU':
-                occupations.append(child.get_value())
-        return occupations if occupations else None
+        return [child.get_value() for child in individual.get_child_elements() if child.get_tag() == 'OCCU']
 
     def _get_education(self, individual):
-        education = []
-        for child in individual.get_child_elements():
-            if child.get_tag() == 'EDUC':
-                education.append(child.get_value())
-        return education if education else None
+        return [child.get_value() for child in individual.get_child_elements() if child.get_tag() == 'EDUC']
 
     def _get_residence(self, individual):
         residences = []
@@ -83,7 +78,7 @@ class GedcomParser:
                     elif resi_detail.get_tag() == 'PLAC':
                         place = resi_detail.get_value()
                 residences.append({'date': date, 'place': place})
-        return residences if residences else None
+        return residences
 
     def _get_family_member(self, family, member_tag):
         for child in family.get_child_elements():
@@ -92,11 +87,63 @@ class GedcomParser:
         return None
 
     def _get_family_members(self, family, member_tag):
-        members = []
-        for child in family.get_child_elements():
-            if child.get_tag() == member_tag:
-                members.append(child.get_value())
-        return members
+        return [child.get_value() for child in family.get_child_elements() if child.get_tag() == member_tag]
+
+    # Validation methods
+    def _validate_name(self, name):
+        if not name:
+            return "Unknown"
+        if isinstance(name, tuple):
+            # If name is a tuple, join its non-empty parts
+            return ' '.join(part for part in name if part)
+        elif isinstance(name, str):
+            # If name is a string, remove extra spaces
+            return ' '.join(name.split())
+        else:
+            # If name is neither tuple nor string, return as is
+            return str(name)
+
+    def _validate_sex(self, sex):
+        if sex in ['M', 'F']:
+            return sex
+        return 'U'  # Unknown
+
+    def _validate_date(self, date_str):
+        if not date_str:
+            return None
+        try:
+            return datetime.strptime(date_str, "%d %b %Y").date()
+        except ValueError:
+            try:
+                return datetime.strptime(date_str, "%b %Y").date().replace(day=1)
+            except ValueError:
+                try:
+                    return datetime.strptime(date_str, "%Y").date().replace(month=1, day=1)
+                except ValueError:
+                    return None
+
+    def _validate_place(self, place):
+        if not place:
+            return None
+        return place.strip()
+
+    def _validate_event(self, event):
+        if not event:
+            return None
+        return {
+            'date': self._validate_date(event.get('date')),
+            'place': self._validate_place(event.get('place'))
+        }
+
+    def _validate_list(self, items):
+        if not items:
+            return []
+        return [item for item in items if item]
+
+    def _validate_id(self, id_str):
+        if not id_str:
+            return None
+        return id_str if re.match(r'@[^@]+@', id_str) else None
 
     def get_parsed_data(self):
         return {
@@ -107,7 +154,7 @@ class GedcomParser:
 # Usage example
 if __name__ == "__main__":
     try:
-        parser = GedcomParser("Fennessy.ged")
+        parser = GedcomParser("path_to_your_gedcom_file.ged")
         parser.parse()
         parsed_data = parser.get_parsed_data()
         
@@ -119,6 +166,80 @@ if __name__ == "__main__":
         print("\nExample Individual Details:")
         for key, value in first_individual.items():
             print(f"{key}: {value}")
+        
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        print("Please check that the GEDCOM file path is correct and the file is accessible.")
+
+# New demonstration code
+def demonstrate_validation(parsed_data):
+    print("\nValidation Demonstration:")
+    
+    # Demonstrate name validation
+    print("\n1. Name Validation:")
+    for ind_id, individual in parsed_data['individuals'].items():
+        print(f"  Individual {ind_id}: {individual['name']}")
+        if len(parsed_data['individuals']) >= 3:  # Stop after 3 examples
+            break
+
+    # Demonstrate sex validation
+    print("\n2. Sex Validation:")
+    for ind_id, individual in parsed_data['individuals'].items():
+        print(f"  Individual {ind_id}: Sex = {individual['sex']}")
+        if len(parsed_data['individuals']) >= 3:  # Stop after 3 examples
+            break
+
+    # Demonstrate date validation
+    print("\n3. Date Validation:")
+    for ind_id, individual in parsed_data['individuals'].items():
+        birth = individual['birth']
+        death = individual['death']
+        print(f"  Individual {ind_id}:")
+        print(f"    Birth: {birth['date'] if birth else 'Unknown'}")
+        print(f"    Death: {death['date'] if death else 'Unknown'}")
+        if len(parsed_data['individuals']) >= 3:  # Stop after 3 examples
+            break
+
+    # Demonstrate place validation
+    print("\n4. Place Validation:")
+    for ind_id, individual in parsed_data['individuals'].items():
+        birth = individual['birth']
+        death = individual['death']
+        print(f"  Individual {ind_id}:")
+        print(f"    Birth Place: {birth['place'] if birth else 'Unknown'}")
+        print(f"    Death Place: {death['place'] if death else 'Unknown'}")
+        if len(parsed_data['individuals']) >= 3:  # Stop after 3 examples
+            break
+
+    # Demonstrate list validation (e.g., occupations)
+    print("\n5. List Validation (Occupations):")
+    for ind_id, individual in parsed_data['individuals'].items():
+        occupations = individual['occupation']
+        print(f"  Individual {ind_id}: Occupations = {occupations}")
+        if len(parsed_data['individuals']) >= 3:  # Stop after 3 examples
+            break
+
+    # Demonstrate family validation
+    print("\n6. Family Validation:")
+    for fam_id, family in parsed_data['families'].items():
+        print(f"  Family {fam_id}:")
+        print(f"    Husband: {family['husband']}")
+        print(f"    Wife: {family['wife']}")
+        print(f"    Children: {family['children']}")
+        print(f"    Marriage: {family['marriage']}")
+        if len(parsed_data['families']) >= 3:  # Stop after 3 examples
+            break
+
+if __name__ == "__main__":
+    try:
+        parser = GedcomParser("path_to_your_gedcom_file.ged")
+        parser.parse()
+        parsed_data = parser.get_parsed_data()
+        
+        print(f"Total individuals: {len(parsed_data['individuals'])}")
+        print(f"Total families: {len(parsed_data['families'])}")
+        
+        demonstrate_validation(parsed_data)
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
