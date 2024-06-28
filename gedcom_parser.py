@@ -5,13 +5,13 @@ from collections import defaultdict
 import re
 from datetime import datetime, date
 
-
 class GedcomParser:
     def __init__(self, file_path):
         self.file_path = file_path
         self.individuals = defaultdict(lambda: defaultdict(lambda: None))
         self.families = defaultdict(lambda: defaultdict(lambda: None))
         self.gedcom_parser = Parser()
+        self.validation_issues = []
 
     def parse(self):
         self.gedcom_parser.parse_file(self.file_path)
@@ -150,6 +150,119 @@ class GedcomParser:
             'individuals': dict(self.individuals),
             'families': dict(self.families)
         }
+    
+    def validate_data(self):
+        self._validate_dates()
+        self._validate_family_relationships()
+        self._validate_marriage_dates()
+
+
+    def _validate_dates(self):
+        for ind_id, individual in self.individuals.items():
+            name = individual['name']
+            birth_date = individual['birth']['date'] if individual['birth'] else None
+            death_date = individual['death']['date'] if individual['death'] else None
+
+            if birth_date and death_date and birth_date > death_date:
+                self.validation_issues.append(
+                    f"Individual {ind_id} ({name}): Birth date ({birth_date}) is after death date ({death_date})")
+
+            if death_date and death_date > date.today():
+                self.validation_issues.append(
+                    f"Individual {ind_id} ({name}): Death date ({death_date}) is in the future")
+
+            if birth_date and birth_date > date.today():
+                self.validation_issues.append(
+                    f"Individual {ind_id} ({name}): Birth date ({birth_date}) is in the future")
+
+
+    def _get_individual_info(self, ind_id):
+        if ind_id and ind_id in self.individuals:
+            ind = self.individuals[ind_id]
+            name = ind['name']
+            birth = ind['birth']['date'] if ind['birth'] else 'Unknown'
+            return f"{ind_id}: {name}, born {birth}"
+        return "Unknown"
+
+    def _validate_family_relationships(self):
+        for fam_id, family in self.families.items():
+            father_id = family['husband']
+            mother_id = family['wife']
+            children_ids = family['children']
+
+            father_info = self._get_individual_info(father_id)
+            mother_info = self._get_individual_info(mother_id)
+
+            family_description = f"Family {fam_id} - Father: {father_info}, Mother: {mother_info}"
+
+            if father_id:
+                father = self.individuals[father_id]
+                father_birth = father['birth']['date'] if father['birth'] else None
+
+                for child_id in children_ids:
+                    child = self.individuals[child_id]
+                    child_name = child['name']
+                    child_birth = child['birth']['date'] if child['birth'] else None
+
+                    if father_birth and child_birth and father_birth > child_birth:
+                        self.validation_issues.append(
+                            f"{family_description}\n"
+                            f"  Issue: Father born after child ({child_id}: {child_name}, born {child_birth})")
+
+            if mother_id:
+                mother = self.individuals[mother_id]
+                mother_birth = mother['birth']['date'] if mother['birth'] else None
+
+                for child_id in children_ids:
+                    child = self.individuals[child_id]
+                    child_name = child['name']
+                    child_birth = child['birth']['date'] if child['birth'] else None
+
+                    if mother_birth and child_birth and mother_birth > child_birth:
+                        self.validation_issues.append(
+                            f"{family_description}\n"
+                            f"  Issue: Mother born after child ({child_id}: {child_name}, born {child_birth})")
+
+    def _validate_marriage_dates(self):
+        for fam_id, family in self.families.items():
+            marriage_date = family['marriage']['date'] if family['marriage'] else None
+            husband_id = family['husband']
+            wife_id = family['wife']
+
+            father_info = self._get_individual_info(husband_id)
+            mother_info = self._get_individual_info(wife_id)
+
+            family_description = f"Family {fam_id} - Father: {father_info}, Mother: {mother_info}"
+
+            if marriage_date:
+                if husband_id:
+                    husband = self.individuals[husband_id]
+                    husband_birth = husband['birth']['date'] if husband['birth'] else None
+                    if husband_birth and marriage_date < husband_birth:
+                        self.validation_issues.append(
+                            f"{family_description}\n"
+                            f"  Issue: Marriage date ({marriage_date}) before husband's birth")
+
+                if wife_id:
+                    wife = self.individuals[wife_id]
+                    wife_birth = wife['birth']['date'] if wife['birth'] else None
+                    if wife_birth and marriage_date < wife_birth:
+                        self.validation_issues.append(
+                            f"{family_description}\n"
+                            f"  Issue: Marriage date ({marriage_date}) before wife's birth")
+
+                for child_id in family['children']:
+                    child = self.individuals[child_id]
+                    child_name = child['name']
+                    child_birth = child['birth']['date'] if child['birth'] else None
+                    if child_birth and marriage_date > child_birth:
+                        self.validation_issues.append(
+                            f"{family_description}\n"
+                            f"  Issue: Marriage date ({marriage_date}) after child's birth "
+                            f"({child_id}: {child_name}, born {child_birth})")
+
+    def get_validation_issues(self):
+        return self.validation_issues
 
 # Usage example
 if __name__ == "__main__":
@@ -234,12 +347,19 @@ if __name__ == "__main__":
     try:
         parser = GedcomParser("path_to_your_gedcom_file.ged")
         parser.parse()
+        parser.validate_data()
         parsed_data = parser.get_parsed_data()
+        validation_issues = parser.get_validation_issues()
         
         print(f"Total individuals: {len(parsed_data['individuals'])}")
         print(f"Total families: {len(parsed_data['families'])}")
         
-        demonstrate_validation(parsed_data)
+        print("\nValidation Issues:")
+        if validation_issues:
+            for issue in validation_issues:
+                print(f"- {issue}")
+        else:
+            print("No validation issues found.")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
