@@ -3,3 +3,5 @@ Fennessy.ged
 path_to_your_gedcom_file.ged
 your_gedcom_file.ged
 gedcom_validation_report.*
+*.png
+*.ged

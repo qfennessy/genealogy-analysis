@@ -1,1 +1,3 @@
 python-gedcom
+matplotlib
+networkx

@@ -9,6 +9,10 @@ import re
 from datetime import datetime, date
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
+import matplotlib.pyplot as plt
+import networkx as nx
+from collections import Counter
+from typing import Dict, List
 
 @dataclass
 class Event:
@@ -55,7 +59,124 @@ class GedcomData:
 
     def get_family(self, id: str) -> Optional[Family]:
         return self.families.get(id)
-    
+
+
+class VisualizationEngine:
+    def __init__(self, gedcom_data):
+        self.gedcom_data = gedcom_data
+
+    def create_name_frequency_chart(self, output_file: str, top_n: int = 10):
+        """
+        Create a bar chart of the most common first names.
+        """
+        first_names = [individual.name.split()[0] for individual in self.gedcom_data.individuals.values()]
+        name_counts = Counter(first_names).most_common(top_n)
+        
+        names, counts = zip(*name_counts)
+        
+        plt.figure(figsize=(12, 6))
+        plt.bar(names, counts)
+        plt.title(f'Top {top_n} Most Common First Names')
+        plt.xlabel('Names')
+        plt.ylabel('Frequency')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(output_file)
+        plt.close()
+
+    def create_birth_year_distribution(self, output_file: str):
+        """
+        Create a histogram of birth years.
+        """
+        birth_years = [
+            individual.birth.date.year 
+            for individual in self.gedcom_data.individuals.values() 
+            if individual.birth and individual.birth.date
+        ]
+        
+        plt.figure(figsize=(12, 6))
+        plt.hist(birth_years, bins=30, edgecolor='black')
+        plt.title('Distribution of Birth Years')
+        plt.xlabel('Year')
+        plt.ylabel('Number of Individuals')
+        plt.tight_layout()
+        plt.savefig(output_file)
+        plt.close()
+
+    def create_family_size_chart(self, output_file: str):
+        """
+        Create a bar chart of family sizes.
+        """
+        family_sizes = [len(family.children_ids) for family in self.gedcom_data.families.values()]
+        size_counts = Counter(family_sizes)
+        
+        sizes = list(range(max(family_sizes) + 1))
+        counts = [size_counts[size] for size in sizes]
+        
+        plt.figure(figsize=(12, 6))
+        plt.bar(sizes, counts)
+        plt.title('Distribution of Family Sizes')
+        plt.xlabel('Number of Children')
+        plt.ylabel('Number of Families')
+        plt.xticks(sizes)
+        plt.tight_layout()
+        plt.savefig(output_file)
+        plt.close()
+
+    def create_family_tree(self, root_individual_id: str, output_file: str, max_generations: int = 3):
+        """
+        Create a family tree graph starting from a given individual.
+        """
+        G = nx.Graph()
+        self._add_individual_to_tree(G, root_individual_id, max_generations)
+        
+        pos = nx.spring_layout(G, k=0.9, iterations=50)
+        plt.figure(figsize=(16, 9))
+        nx.draw(G, pos, with_labels=True, node_color='lightblue', node_size=3000, font_size=8, font_weight='bold')
+        nx.draw_networkx_labels(G, pos, nx.get_node_attributes(G, 'label'), font_size=6)
+        plt.title(f"Family Tree - {self.gedcom_data.get_individual(root_individual_id).name}")
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
+
+    def _add_individual_to_tree(self, G: nx.Graph, individual_id: str, generations_left: int):
+        if generations_left == 0:
+            return
+
+        individual = self.gedcom_data.get_individual(individual_id)
+        if not individual:
+            return
+
+        name = individual.name
+        birth_year = individual.birth.date.year if individual.birth and individual.birth.date else "Unknown"
+        label = f"{name}\n({birth_year})"
+        G.add_node(individual_id, label=label)
+
+        # Add parents
+        for family_id in individual.families_as_child:
+            family = self.gedcom_data.get_family(family_id)
+            if family:
+                if family.husband_id:
+                    G.add_edge(individual_id, family.husband_id)
+                    self._add_individual_to_tree(G, family.husband_id, generations_left - 1)
+                if family.wife_id:
+                    G.add_edge(individual_id, family.wife_id)
+                    self._add_individual_to_tree(G, family.wife_id, generations_left - 1)
+
+        # Add spouse and children
+        for family_id in individual.families_as_spouse:
+            family = self.gedcom_data.get_family(family_id)
+            if family:
+                spouse_id = family.wife_id if individual_id == family.husband_id else family.husband_id
+                if spouse_id:
+                    G.add_edge(individual_id, spouse_id)
+                    self._add_individual_to_tree(G, spouse_id, generations_left - 1)
+                
+                for child_id in family.children_ids:
+                    G.add_edge(individual_id, child_id)
+                    self._add_individual_to_tree(G, child_id, generations_left - 1)
+
 class AnalysisEngine:
     def __init__(self, gedcom_data: GedcomData):
         self.gedcom_data = gedcom_data
@@ -527,11 +648,82 @@ class GedcomParser:
             htmlfile.write(html_content)
     
 def setup_argparser():
-    parser = argparse.ArgumentParser(description='GEDCOM Parser and Validator')
+    parser = argparse.ArgumentParser(description='GEDCOM Parser and Analyzer')
     parser.add_argument('--gedcom_file', required=True, help='Path to the GEDCOM file')
     parser.add_argument('--demo', action='store_true', help='Run demonstration functions')
+    parser.add_argument('--visualize', action='store_true', help='Generate visualizations')
+    parser.add_argument('--tree_root', help='ID of the root individual for family tree visualization')
     return parser
 
+
+def run_analysis(gedcom_data: GedcomData):
+    analysis_engine = AnalysisEngine(gedcom_data)
+    
+    print("\nAnalysis Results:")
+    name_freq = analysis_engine.analyze_name_frequency()
+    if name_freq:
+        most_common_name = max(name_freq, key=name_freq.get)
+        print(f"Most common first name: {most_common_name} ({name_freq[most_common_name]} occurrences)")
+    
+    surname_freq = analysis_engine.analyze_surname_frequency()
+    if surname_freq:
+        most_common_surname = max(surname_freq, key=surname_freq.get)
+        print(f"Most common surname: {most_common_surname} ({surname_freq[most_common_surname]} occurrences)")
+    
+    birth_range = analysis_engine.analyze_birth_date_range()
+    if birth_range:
+        print(f"Birth date range: {birth_range[0]} to {birth_range[1]}")
+    
+    death_range = analysis_engine.analyze_death_date_range()
+    if death_range:
+        print(f"Death date range: {death_range[0]} to {death_range[1]}")
+    
+    location_stats = analysis_engine.analyze_location_statistics()
+    if location_stats:
+        most_common_place = max(location_stats, key=location_stats.get)
+        print(f"Most common birth place: {most_common_place} ({location_stats[most_common_place]} occurrences)")
+    
+    avg_lifespan = analysis_engine.analyze_average_lifespan()
+    print(f"Average lifespan: {avg_lifespan:.2f} years")
+    
+    family_sizes = analysis_engine.analyze_family_sizes()
+    if family_sizes:
+        avg_family_size = sum(k*v for k,v in family_sizes.items()) / sum(family_sizes.values())
+        print(f"Average family size: {avg_family_size:.2f} children")
+    
+    largest_families = analysis_engine.find_largest_families(1)
+    if largest_families:
+        largest_family = largest_families[0]
+        print(f"Largest family: Family {largest_family[0]} with {largest_family[1]} children")
+    
+    marriage_ages = analysis_engine.analyze_marriage_age()
+    print(f"Average age at first marriage: Males {marriage_ages['male']:.2f}, Females {marriage_ages['female']:.2f}")
+    
+    common_occupation = analysis_engine.find_most_common_occupation()
+    print(f"Most common occupation: {common_occupation[0]} ({common_occupation[1]} individuals)")
+    
+    print(f"Number of generations: {analysis_engine.analyze_generation_span()}")
+
+def run_visualizations(gedcom_data: GedcomData, root_individual_id: str = None):
+    viz_engine = VisualizationEngine(gedcom_data)
+    
+    viz_engine.create_name_frequency_chart("name_frequency.png")
+    viz_engine.create_birth_year_distribution("birth_year_distribution.png")
+    viz_engine.create_family_size_chart("family_size_distribution.png")
+    
+    if root_individual_id:
+        if root_individual_id in gedcom_data.individuals:
+            viz_engine.create_family_tree(root_individual_id, "family_tree.png")
+            print(f"- Family tree: family_tree.png (Root: {root_individual_id})")
+        else:
+            print(f"Warning: Root individual {root_individual_id} not found. Family tree not generated.")
+    else:
+        print("Note: No root individual specified for family tree.")
+
+    print("\nVisualizations generated:")
+    print("- Name frequency chart: name_frequency.png")
+    print("- Birth year distribution: birth_year_distribution.png")
+    print("- Family size distribution: family_size_distribution.png")
 
 # New demonstration code
 def demonstrate_validation(parsed_data):
@@ -626,6 +818,13 @@ if __name__ == "__main__":
             print(f"\nReports generated:")
             print(f"- CSV report: {csv_report}")
             print(f"- HTML report: {html_report}")
+
+            # Run analysis
+            run_analysis(parser.gedcom_data)
+
+            # Run visualizations if requested
+            if args.visualize:
+                run_visualizations(parser.gedcom_data, args.tree_root)
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
